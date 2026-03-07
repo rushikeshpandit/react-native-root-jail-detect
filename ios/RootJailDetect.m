@@ -53,6 +53,22 @@ RCT_EXTERN_METHOD(isDebuggerAttached:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
 /**
+ Returns all detection reasons
+ */
+RCT_EXTERN_METHOD(getDetectionReasons:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+/**
+ Starts watchdog
+ */
+RCT_EXTERN_METHOD(startSecurityWatchdog:(NSDictionary *)options)
+
+/**
+ Stops watchdog
+ */
+RCT_EXTERN_METHOD(stopSecurityWatchdog)
+
+/**
  * Indicates whether the module must be initialized
  * on the main (UI) thread.
  *

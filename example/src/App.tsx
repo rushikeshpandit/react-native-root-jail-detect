@@ -13,6 +13,7 @@ import {
   isDeviceCompromised,
   isEmulator,
   isDebuggerAttached,
+  getDetectionReasons,
 } from 'react-native-root-jail-detect';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -21,23 +22,27 @@ function App() {
   const [isCompromised, setIsCompromised] = useState<boolean | null>(null);
   const [isEmu, setIsEmu] = useState<boolean | null>(null);
   const [isDebugger, setIsDebugger] = useState<boolean | null>(null);
+  const [detectionReasons, setDetectionReasons] = useState<string[]>([]);
 
   const checkDeviceSecurity = async () => {
     setLoading(true);
     try {
-      const [compromised, emulator, debuggerAttached]: [
+      const [compromised, emulator, debuggerAttached, detectionReason]: [
         boolean,
         boolean,
-        boolean
+        boolean,
+        string[]
       ] = await Promise.all([
         isDeviceCompromised(),
         isEmulator(),
         isDebuggerAttached(),
+        getDetectionReasons(),
       ]);
 
       setIsCompromised(compromised);
       setIsEmu(emulator);
       setIsDebugger(debuggerAttached);
+      setDetectionReasons(detectionReason);
 
       if (compromised) {
         Alert.alert(
@@ -137,7 +142,7 @@ function App() {
                 </View>
               </View>
               <Text style={styles.resultDescription}>
-                Checks if debugger is currently attached (iOS only)
+                Checks if debugger is currently attached
               </Text>
             </View>
 
@@ -148,13 +153,14 @@ function App() {
               <Text style={styles.recheckButtonText}>Recheck Security</Text>
             </TouchableOpacity>
 
-            {isCompromised && (
+            {detectionReasons && detectionReasons.length > 0 && (
               <View style={styles.warningBox}>
                 <Text style={styles.warningTitle}>Security Notice</Text>
-                <Text style={styles.warningText}>
-                  Your device appears to be compromised. This could pose
-                  security risks. Sensitive operations may be restricted.
-                </Text>
+                {detectionReasons.map((reason, index) => (
+                  <Text key={index} style={styles.warningText}>
+                    - {reason}
+                  </Text>
+                ))}
               </View>
             )}
           </View>

@@ -1,74 +1,33 @@
 {
-  "name": "react-native-root-jail-detect",
-  "version": "1.0.0",
-  "description": "A lightweight and reliable React Native library to detect rooted Android devices and jailbroken iOS devices using modern Kotlin, Swift, and TypeScript. Built for security-focused mobile applications.",
-  "main": "./lib/module/index.js",
-  "types": "./lib/typescript/src/index.d.ts",
-  "exports": {
-    ".": {
-      "source": "./src/index.tsx",
-      "types": "./lib/typescript/src/index.d.ts",
-      "default": "./lib/module/index.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "src",
-    "lib",
-    "android",
-    "ios",
-    "cpp",
-    "*.podspec",
-    "react-native.config.js",
-    "!ios/build",
-    "!android/build",
-    "!android/gradle",
-    "!android/gradlew",
-    "!android/gradlew.bat",
-    "!android/local.properties",
-    "!**/__tests__",
-    "!**/__fixtures__",
-    "!**/__mocks__",
-    "!**/.*"
-  ],
-  "scripts": {
-    "example": "yarn workspace react-native-root-jail-detect-example",
-    "clean": "del-cli android/build example/android/build example/android/app/build example/ios/build lib",
-    "prepare": "bob build",
-    "typecheck": "tsc",
-    "test": "jest",
-    "release": "release-it --only-version",
-    "lint": "eslint \"**/*.{js,ts,tsx}\""
-  },
-  "keywords": [
-    "react-native",
-    "ios",
-    "android",
-    "root",
-    "jailbreak",
-    "security",
-    "integrity",
-    "root-detection",
-    "jailbreak-detection",
-    "mobile-security",
-    "device-integrity",
-    "android-root",
-    "ios-jailbreak",
-    "security-sdk"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/rushikeshpandit/react-native-root-jail-detect.git"
-  },
   "author": "Rushikesh Pandit <rushikesh.d.pandit@gmail.com> (https://github.com/rushikeshpandit)",
-  "license": "MIT",
   "bugs": {
     "url": "https://github.com/rushikeshpandit/react-native-root-jail-detect/issues"
   },
-  "homepage": "https://github.com/rushikeshpandit/react-native-root-jail-detect#readme",
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+  "codegenConfig": {
+    "android": {
+      "javaPackageName": "com.rootjaildetect"
+    },
+    "jsSrcsDir": "src",
+    "name": "RootJailDetectSpec",
+    "type": "modules"
   },
+  "commitlint": {
+    "extends": [
+      "@commitlint/config-conventional"
+    ]
+  },
+  "create-react-native-library": {
+    "languages": "kotlin-objc",
+    "tools": [
+      "jest",
+      "lefthook",
+      "release-it",
+      "eslint"
+    ],
+    "type": "turbo-module",
+    "version": "0.57.2"
+  },
+  "description": "A lightweight and reliable React Native library to detect rooted Android devices and jailbroken iOS devices using modern Kotlin, Swift, and TypeScript. Built for security-focused mobile applications.",
   "devDependencies": {
     "@commitlint/config-conventional": "^19.8.1",
     "@eslint/compat": "^1.3.2",
@@ -94,17 +53,93 @@
     "turbo": "^2.5.6",
     "typescript": "^5.9.2"
   },
+  "exports": {
+    ".": {
+      "default": "./lib/module/index.js",
+      "source": "./src/index.tsx",
+      "types": "./lib/typescript/src/index.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "lib",
+    "android",
+    "ios",
+    "cpp",
+    "*.podspec",
+    "react-native.config.js",
+    "!ios/build",
+    "!android/build",
+    "!android/gradle",
+    "!android/gradlew",
+    "!android/gradlew.bat",
+    "!android/local.properties",
+    "!**/__tests__",
+    "!**/__fixtures__",
+    "!**/__mocks__",
+    "!**/.*"
+  ],
+  "homepage": "https://github.com/rushikeshpandit/react-native-root-jail-detect#readme",
+  "jest": {
+    "modulePathIgnorePatterns": [
+      "<rootDir>/example/node_modules",
+      "<rootDir>/lib/"
+    ],
+    "preset": "react-native"
+  },
+  "keywords": [
+    "react-native",
+    "ios",
+    "android",
+    "root",
+    "jailbreak",
+    "security",
+    "integrity",
+    "root-detection",
+    "jailbreak-detection",
+    "mobile-security",
+    "device-integrity",
+    "android-root",
+    "ios-jailbreak",
+    "security-sdk",
+    "ios",
+    "android",
+    "root",
+    "jailbreak",
+    "mobile-app-security",
+    "frida-detection",
+    "instrumentation-detection",
+    "runtime-security",
+    "anti-debug",
+    "debugger-detection",
+    "tamper-detection",
+    "anti-tampering",
+    "hook-detection",
+    "emulator-detection",
+    "simulator-detection"
+  ],
+  "license": "MIT",
+  "main": "./lib/module/index.js",
+  "name": "react-native-root-jail-detect",
+  "packageManager": "yarn@4.11.0",
   "peerDependencies": {
     "react": "*",
     "react-native": "*"
   },
-  "workspaces": [
-    "example"
-  ],
-  "packageManager": "yarn@4.11.0",
+  "prettier": {
+    "quoteProps": "consistent",
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "es5",
+    "useTabs": false
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "react-native-builder-bob": {
-    "source": "src",
     "output": "lib",
+    "source": "src",
     "targets": [
       [
         "module",
@@ -120,36 +155,16 @@
       ]
     ]
   },
-  "codegenConfig": {
-    "name": "RootJailDetectSpec",
-    "type": "modules",
-    "jsSrcsDir": "src",
-    "android": {
-      "javaPackageName": "com.rootjaildetect"
-    }
-  },
-  "jest": {
-    "preset": "react-native",
-    "modulePathIgnorePatterns": [
-      "<rootDir>/example/node_modules",
-      "<rootDir>/lib/"
-    ]
-  },
-  "commitlint": {
-    "extends": [
-      "@commitlint/config-conventional"
-    ]
-  },
   "release-it": {
     "git": {
       "commitMessage": "chore: release ${version}",
       "tagName": "v${version}"
     },
-    "npm": {
-      "publish": true
-    },
     "github": {
       "release": true
+    },
+    "npm": {
+      "publish": true
     },
     "plugins": {
       "@release-it/conventional-changelog": {
@@ -159,22 +174,22 @@
       }
     }
   },
-  "prettier": {
-    "quoteProps": "consistent",
-    "singleQuote": true,
-    "tabWidth": 2,
-    "trailingComma": "es5",
-    "useTabs": false
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rushikeshpandit/react-native-root-jail-detect.git"
   },
-  "create-react-native-library": {
-    "type": "turbo-module",
-    "languages": "kotlin-objc",
-    "tools": [
-      "jest",
-      "lefthook",
-      "release-it",
-      "eslint"
-    ],
-    "version": "0.57.2"
-  }
+  "scripts": {
+    "clean": "del-cli android/build example/android/build example/android/app/build example/ios/build lib",
+    "example": "yarn workspace react-native-root-jail-detect-example",
+    "lint": "eslint \"**/*.{js,ts,tsx}\"",
+    "prepare": "bob build",
+    "release": "release-it --only-version",
+    "test": "jest",
+    "typecheck": "tsc"
+  },
+  "types": "./lib/typescript/src/index.d.ts",
+  "version": "2.0.0",
+  "workspaces": [
+    "example"
+  ]
 }

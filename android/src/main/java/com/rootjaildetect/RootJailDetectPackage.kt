@@ -16,7 +16,6 @@ import com.facebook.react.module.model.ReactModuleInfoProvider
  * the native security module at runtime.
  */
 class RootJailDetectPackage : BaseReactPackage() {
-
     /**
      * Creates and returns an instance of the requested native module.
      *
@@ -31,14 +30,13 @@ class RootJailDetectPackage : BaseReactPackage() {
      */
     override fun getModule(
         name: String,
-        reactContext: ReactApplicationContext
-    ): NativeModule? {
-        return if (name == RootJailDetectModule.NAME) {
+        reactContext: ReactApplicationContext,
+    ): NativeModule? =
+        if (name == RootJailDetectModule.NAME) {
             RootJailDetectModule(reactContext)
         } else {
             null
         }
-    }
 
     /**
      * Provides metadata information about the native module.
@@ -51,16 +49,16 @@ class RootJailDetectPackage : BaseReactPackage() {
      */
     override fun getReactModuleInfoProvider(): ReactModuleInfoProvider =
         ReactModuleInfoProvider {
-
             mapOf(
-                RootJailDetectModule.NAME to ReactModuleInfo(
-                    name = RootJailDetectModule.NAME,
-                    className = RootJailDetectModule.NAME,
-                    canOverrideExistingModule = false,
-                    needsEagerInit = false,
-                    isCxxModule = false,
-                    isTurboModule = true
-                )
+                RootJailDetectModule.NAME to
+                    ReactModuleInfo(
+                        name = RootJailDetectModule.NAME,
+                        className = RootJailDetectModule.NAME,
+                        canOverrideExistingModule = false,
+                        needsEagerInit = false,
+                        isCxxModule = false,
+                        isTurboModule = true,
+                    ),
             )
         }
 }

@@ -1,7 +1,12 @@
 package com.rootjaildetect
 
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.WritableArray
+import com.rootjaildetect.watchdog.ProtectionMode
+import com.rootjaildetect.watchdog.SecurityWatchdog
 
 /**
  * RootJailDetectModule
@@ -13,9 +18,9 @@ import com.facebook.react.bridge.ReactApplicationContext
  * This module acts as a bridge between React Native and
  * native Android security APIs.
  */
-class RootJailDetectModule(reactContext: ReactApplicationContext) :
-    NativeRootJailDetectSpec(reactContext) {
-
+class RootJailDetectModule(
+    reactContext: ReactApplicationContext,
+) : NativeRootJailDetectSpec(reactContext) {
     /**
      * Internal instance of RootDetection responsible for
      * performing low-level security checks.
@@ -41,7 +46,7 @@ class RootJailDetectModule(reactContext: ReactApplicationContext) :
             promise.reject(
                 "ERROR",
                 "Failed to check device security: ${e.message}",
-                e
+                e,
             )
         }
     }
@@ -66,7 +71,7 @@ class RootJailDetectModule(reactContext: ReactApplicationContext) :
             promise.reject(
                 "ERROR",
                 "Failed to check emulator status: ${e.message}",
-                e
+                e,
             )
         }
     }
@@ -91,13 +96,76 @@ class RootJailDetectModule(reactContext: ReactApplicationContext) :
             promise.reject(
                 "ERROR",
                 "Failed to check debugger status: ${e.message}",
-                e
+                e,
             )
         }
     }
 
-    companion object {
+    override fun getDetectionReasons(promise: Promise) {
+        try {
+            val reasons = rootDetection.getDetectionReasons()
 
+            val result: WritableArray = Arguments.createArray()
+
+            reasons.forEach {
+                result.pushString(it)
+            }
+
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("ERROR", "Failed to get detection reasons", e)
+        }
+    }
+
+    /**
+     * Starts a security watchdog that periodically checks the device's security status.
+     *
+     * The watchdog will execute the specified protection mode when a security violation is detected.
+     *
+     * Available protection modes:
+     *   - "TERMINATE": terminates the app process immediately
+     *   - "THROW_EXCEPTION": throws an exception that can be caught by the app
+     *   - "LOG_ONLY": logs a warning message to the console (default)
+     *
+     * The interval at which the watchdog checks the device's security status is specified in milliseconds.
+     *
+     * @param options ReadableMap containing the following keys:
+     *   - "interval": Long value specifying the interval at which the watchdog checks the device's security status
+     *   - "protectionMode": String value specifying the protection mode to execute when a security violation is detected
+     */
+
+    override fun startSecurityWatchdog(options: ReadableMap) {
+        val interval =
+            if (options.hasKey("interval")) options.getInt("interval") else 3000
+
+        val modeString =
+            if (options.hasKey("protectionMode")) {
+                options.getString("protectionMode")
+            } else {
+                "LOG_ONLY"
+            }
+
+        val mode =
+            when (modeString) {
+                "TERMINATE" -> ProtectionMode.TERMINATE
+                "THROW_EXCEPTION" -> ProtectionMode.THROW_EXCEPTION
+                else -> ProtectionMode.LOG_ONLY
+            }
+
+        val detector = RootDetection(reactApplicationContext)
+
+        SecurityWatchdog.start(
+            detector,
+            interval.toLong(),
+            mode,
+        )
+    }
+
+    override fun stopSecurityWatchdog() {
+        SecurityWatchdog.stop()
+    }
+
+    companion object {
         /**
          * Name of the native module exposed to React Native.
          *

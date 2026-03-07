@@ -55,6 +55,40 @@ export interface Spec extends TurboModule {
    *          is attached, false otherwise
    */
   isDebuggerAttached?(): Promise<boolean>;
+
+  /**
+   * Gives the reason for whether the device is compromised
+   * (rooted on Android or jailbroken on iOS).
+   *
+   * This method invokes native security heuristics
+   * and returns the result asynchronously.
+   *
+   * @returns Promise that resolves to array of string if the device
+   *          is compromised, empty otherwise
+   */
+  getDetectionReasons?(): Promise<string[]>;
+
+  /**
+   * Start runtime security watchdog
+   *
+   * This method starts the runtime security watchdog with
+   * the specified interval and protection mode.
+   *
+   * @param {Object} options - Object containing the options for the security watchdog
+   * @param {number} [options.interval=3000] - Interval in milliseconds between each security check
+   * @param {string} [options.protectionMode='LOG_ONLY'] - Protection mode to use. Can be either 'LOG_ONLY' or 'TERMINATE'
+   */
+  startSecurityWatchdog(options: {
+    interval?: number;
+    protectionMode?: string;
+  }): void;
+
+  /**
+   * Stop runtime security watchdog
+   *
+   * This method stops the runtime security watchdog if it is currently running.
+   */
+  stopSecurityWatchdog(): void;
 }
 
 /**
