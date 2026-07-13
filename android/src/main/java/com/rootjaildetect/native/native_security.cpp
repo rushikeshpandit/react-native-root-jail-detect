@@ -181,6 +181,17 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectInlineHook(
         return JNI_FALSE;
     }
 
+#if defined(__arm__)
+    // bionic on 32-bit ARM is built as Thumb-2, so dlsym returns Thumb
+    // symbols with bit 0 set. The A32 branch patterns below don't apply to
+    // Thumb encodings — treat those as not hooked instead of misreading
+    // misaligned bytes.
+    if (reinterpret_cast<uintptr_t>(symbol) & 1u) {
+        dlclose(handle);
+        return JNI_FALSE;
+    }
+#endif
+
     // Read the function prologue safely — dereferencing execute-only .text
     // directly would crash on Android 10 arm64 (see safeRead).
     unsigned char code[4] = {0};
@@ -208,8 +219,10 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectInlineHook(
         hooked = true;
     }
 #elif defined(__arm__)
-    // ARM (32-bit): the first instruction becomes a B (0xEA) or BL (0xEB).
-    if (code[0] == 0xEA || code[0] == 0xEB) hooked = true;
+    // ARM (32-bit): the first instruction becomes an unconditional B (0xEA)
+    // or BL (0xEB). A32 instructions are stored little-endian, so the
+    // condition/opcode byte is code[3]; code[0] is the low immediate byte.
+    if (code[3] == 0xEA || code[3] == 0xEB) hooked = true;
 #endif
 
     dlclose(handle);
