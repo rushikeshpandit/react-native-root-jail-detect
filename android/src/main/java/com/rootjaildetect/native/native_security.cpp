@@ -1,8 +1,11 @@
 #include <jni.h>
 #include <sys/ptrace.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <fstream>
 #include <string>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
 #include <errno.h>
@@ -94,6 +97,70 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectFridaNative(
     return JNI_FALSE;
 }
 
+// Returns the memory protection flags (PROT_* bitmask) of the mapping that
+// contains `addr`, or -1 if it cannot be determined. Parsed from the perms
+// column of /proc/self/maps (e.g. "r-xp").
+static int getPageProtection(uintptr_t addr) {
+    std::ifstream maps("/proc/self/maps");
+    if (!maps.is_open()) return -1;
+
+    std::string line;
+    while (std::getline(maps, line)) {
+        unsigned long start = 0, end = 0;
+        char perms[5] = {0};
+        // Format: "start-end perms offset dev inode pathname"
+        if (std::sscanf(line.c_str(), "%lx-%lx %4s", &start, &end, perms) != 3) {
+            continue;
+        }
+        if (addr >= start && addr < end) {
+            int prot = 0;
+            if (perms[0] == 'r') prot |= PROT_READ;
+            if (perms[1] == 'w') prot |= PROT_WRITE;
+            if (perms[2] == 'x') prot |= PROT_EXEC;
+            return prot;
+        }
+    }
+    return -1;
+}
+
+// Safely copies `len` bytes from `src` into `dst`, temporarily adding read
+// permission when the source page is not readable.
+//
+// On Android 10 (arm64) the .text of system libraries such as libc is mapped
+// execute-only (XOM). Reading it directly raises SIGSEGV (SEGV_ACCERR:
+// "execute-only (no-read) memory access error; likely due to data in .text"),
+// which is an uncatchable native signal that crashes the whole process. XOM
+// was enabled by default in Android 10 only and removed again in Android 11.
+//
+// The page is remapped read+execute only when it is genuinely non-readable,
+// then restored to its original protection so the OS hardening is not
+// permanently weakened. On Android 11+ (already readable) no protection change
+// is made. Returns false — rather than risking a crash — whenever the page
+// cannot be confirmed readable.
+static bool safeRead(const void *src, void *dst, size_t len) {
+    uintptr_t addr = reinterpret_cast<uintptr_t>(src);
+    long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0) pageSize = 4096;
+    uintptr_t mask = static_cast<uintptr_t>(pageSize) - 1;
+    uintptr_t pageStart = addr & ~mask;
+    size_t span = (addr + len) - pageStart;
+    void *page = reinterpret_cast<void *>(pageStart);
+
+    int origProt = getPageProtection(addr);
+    if (origProt == -1) return false;
+
+    bool remapped = false;
+    if (!(origProt & PROT_READ)) {
+        if (mprotect(page, span, origProt | PROT_READ) != 0) return false;
+        remapped = true;
+    }
+
+    std::memcpy(dst, src, len);
+
+    if (remapped) mprotect(page, span, origProt);
+    return true;
+}
+
 /*
  * Detect inline hooks inside libc
  * Used by Frida and Xposed
@@ -114,18 +181,52 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectInlineHook(
         return JNI_FALSE;
     }
 
-    unsigned char *addr = (unsigned char *) symbol;
-
-    /*
-     * Inline hook often replaces first instruction with jump
-     */
-    if (addr[0] == 0xEA || addr[0] == 0xE9) {
+#if defined(__arm__)
+    // bionic on 32-bit ARM is built as Thumb-2, so dlsym returns Thumb
+    // symbols with bit 0 set. The A32 branch patterns below don't apply to
+    // Thumb encodings — treat those as not hooked instead of misreading
+    // misaligned bytes.
+    if (reinterpret_cast<uintptr_t>(symbol) & 1u) {
         dlclose(handle);
-        return JNI_TRUE;
+        return JNI_FALSE;
+    }
+#endif
+
+    // Read the function prologue safely — dereferencing execute-only .text
+    // directly would crash on Android 10 arm64 (see safeRead).
+    unsigned char code[4] = {0};
+    if (!safeRead(symbol, code, sizeof(code))) {
+        dlclose(handle);
+        return JNI_FALSE;
     }
 
+    // An inline hook replaces the prologue with a branch to the trampoline.
+    // The signature is architecture specific: the previous code only tested
+    // ARM (32-bit) branch opcodes, so it never matched — and could false
+    // positive — on the arm64 ABI that ships today.
+    bool hooked = false;
+#if defined(__aarch64__)
+    uint32_t insn = static_cast<uint32_t>(code[0]) |
+                    (static_cast<uint32_t>(code[1]) << 8) |
+                    (static_cast<uint32_t>(code[2]) << 16) |
+                    (static_cast<uint32_t>(code[3]) << 24);
+    // Unconditional branch: B <imm26>, opcode bits [31:26] == 0b000101.
+    if ((insn & 0xFC000000u) == 0x14000000u) hooked = true;
+    // Absolute-jump trampoline: LDR X16/X17, <literal> (0x58...) followed by
+    // BR — a very common Frida/Xposed prologue shape.
+    if ((insn & 0xFF000000u) == 0x58000000u &&
+        ((insn & 0x1Fu) == 16u || (insn & 0x1Fu) == 17u)) {
+        hooked = true;
+    }
+#elif defined(__arm__)
+    // ARM (32-bit): the first instruction becomes an unconditional B (0xEA)
+    // or BL (0xEB). A32 instructions are stored little-endian, so the
+    // condition/opcode byte is code[3]; code[0] is the low immediate byte.
+    if (code[3] == 0xEA || code[3] == 0xEB) hooked = true;
+#endif
+
     dlclose(handle);
-    return JNI_FALSE;
+    return hooked ? JNI_TRUE : JNI_FALSE;
 }
 
 /*
