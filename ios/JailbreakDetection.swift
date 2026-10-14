@@ -1,14 +1,6 @@
 import Foundation
 
-  /// JailbreakDetection
-  ///
-  /// Public entry point for all device security checks.
-  ///
-  /// This class acts as a façade that delegates detection
-  /// to specialized checker classes.
-  ///
-  /// Public API remains simple while still allowing
-  /// detailed inspection through `getDetectionReasons()`.
+/// Facade over all iOS detectors; the Swift module and the watchdog talk only to this class.
 @objc
 public class JailbreakDetection: NSObject {
   
@@ -19,11 +11,11 @@ public class JailbreakDetection: NSObject {
   private static let hookChecker = HookFrameworkChecker()
   private static let advancedChecker = AdvancedSecurityChecker()
   
-  /**
-   Determines whether the device appears to be jailbroken.
-   
-   - Returns: true if jailbreak indicators are detected
-   */
+  /// Decides whether the device is jailbroken or instrumented: jailbreak artifacts, Frida, hook
+  /// frameworks, ptrace/tracer state and DYLD injection. Simulators and debuggers alone do not
+  /// count.
+  ///
+  /// - Returns: `true` if any indicator was found.
   @objc
   public static func isDeviceJailbroken() -> Bool {
     
@@ -35,42 +27,51 @@ public class JailbreakDetection: NSObject {
     || advancedChecker.detectDYLDInjection()
   }
   
-  /**
-   Determines whether the app is running on simulator.
-   
-   - Returns: true if simulator environment detected
-   */
+  /// Reports whether the app runs in the iOS simulator.
+  ///
+  /// - Returns: `true` in the simulator.
   @objc
   public static func isSimulator() -> Bool {
     return simulatorChecker.isSimulator()
   }
   
-  /**
-   Determines whether a debugger is attached.
-   
-   - Returns: true if debugger detected
-   */
+  /// Reports whether a debugger is attached. Always `false` in DEBUG builds, where Xcode
+  /// attaches one by design.
+  ///
+  /// - Returns: `true` if the process is being traced.
   @objc
   public static func isDebuggerAttached() -> Bool {
     return debuggerChecker.isDebuggerAttached()
   }
   
-  /**
-   Returns human-readable detection reasons.
-   
-   Example:
-   [
-   "Frida port 27042 open",
-   "Cydia application detected"
-   ]
-   */
+  /// Reasons limited to what the watchdog acts on: everything except simulator findings.
+  ///
+  /// - Returns: De-duplicated, human-readable reasons.
+  @objc
+  public static func getThreatReasons() -> [String] {
+    return collectReasons(includeSimulator: false)
+  }
+
+  /// All reasons from every detector, including simulator findings.
+  ///
+  /// - Returns: De-duplicated, human-readable reasons; empty when nothing was found.
   @objc
   public static func getDetectionReasons() -> [String] {
+    return collectReasons(includeSimulator: true)
+  }
+
+  /// Gathers reasons from the detectors in a fixed order.
+  ///
+  /// - Parameter includeSimulator: Whether simulator findings are included.
+  /// - Returns: De-duplicated reasons.
+  private static func collectReasons(includeSimulator: Bool) -> [String] {
     
     var reasons: [String] = []
     
     reasons += jailbreakChecker.getReasons()
-    reasons += simulatorChecker.getReasons()
+    if includeSimulator {
+      reasons += simulatorChecker.getReasons()
+    }
     reasons += debuggerChecker.getReasons()
     reasons += fridaChecker.getReasons()
     reasons += hookChecker.getReasons()
@@ -79,6 +80,12 @@ public class JailbreakDetection: NSObject {
     return Array(Set(reasons))
   }
   
+  /// Legacy Objective-C entry point that starts the shared watchdog. The React Native bridge
+  /// uses `RootJailDetect.startSecurityWatchdog` instead.
+  ///
+  /// - Parameters:
+  ///   - interval: Interval in milliseconds.
+  ///   - protectionMode: `TERMINATE`, `THROW_EXCEPTION`; anything else means log only.
   @objc
   func startSecurityWatchdog(
     _ interval: NSNumber,
@@ -104,6 +111,7 @@ public class JailbreakDetection: NSObject {
     )
   }
   
+  /// Legacy Objective-C entry point that stops the shared watchdog.
   @objc
   func stopSecurityWatchdog() {
     SecurityWatchdog.shared.stop()
