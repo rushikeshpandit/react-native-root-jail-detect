@@ -11,72 +11,51 @@ import { TurboModuleRegistry, type TurboModule } from 'react-native';
  */
 export interface Spec extends TurboModule {
   /**
-   * Checks whether the current device is compromised
-   * (rooted on Android or jailbroken on iOS).
+   * Native: checks whether the device is rooted/jailbroken.
    *
-   * This method invokes native security heuristics
-   * and returns the result asynchronously.
-   *
-   * @returns Promise that resolves to true if the device
-   *          is compromised, false otherwise
+   * @returns Promise resolving to `true` if compromised; rejects with code `ERROR` on a native
+   *     failure.
    */
   isDeviceCompromised(): Promise<boolean>;
 
   /**
-   * Determines whether the application is running
-   * inside an Android emulator environment.
+   * Native (Android): checks whether the app runs on an emulator.
    *
-   * This method is primarily used on Android devices.
-   *
-   * @returns Promise that resolves to true if running
-   *          on an emulator, false otherwise
+   * @returns Promise resolving to `true` on an emulator; rejects with code `ERROR` on a native
+   *     failure.
    */
   isEmulator?(): Promise<boolean>;
 
   /**
-   * Determines whether the application is running
-   * inside an iOS simulator environment.
+   * Native (iOS): checks whether the app runs on a simulator.
    *
-   * This method is primarily used on iOS devices.
-   *
-   * @returns Promise that resolves to true if running
-   *          on a simulator, false otherwise
+   * @returns Promise resolving to `true` on a simulator; rejects on a native failure.
    */
   isSimulator?(): Promise<boolean>;
 
   /**
-   * Checks whether a debugger is currently attached
-   * to the running application process.
+   * Native: checks whether a debugger is attached to the process.
    *
-   * This helps detect debugging, reverse engineering,
-   * and runtime inspection attempts.
-   *
-   * @returns Promise that resolves to true if a debugger
-   *          is attached, false otherwise
+   * @returns Promise resolving to `true` if a debugger is attached; rejects on a native
+   *     failure.
    */
   isDebuggerAttached?(): Promise<boolean>;
 
   /**
-   * Gives the reason for whether the device is compromised
-   * (rooted on Android or jailbroken on iOS).
+   * Native: lists human-readable reasons produced by all checkers.
    *
-   * This method invokes native security heuristics
-   * and returns the result asynchronously.
-   *
-   * @returns Promise that resolves to array of string if the device
-   *          is compromised, empty otherwise
+   * @returns Promise resolving to the de-duplicated reason strings (empty when nothing was
+   *     found).
    */
   getDetectionReasons?(): Promise<string[]>;
 
   /**
-   * Start runtime security watchdog
+   * Native: starts the runtime watchdog. Ignored if it is already running.
    *
-   * This method starts the runtime security watchdog with
-   * the specified interval and protection mode.
-   *
-   * @param {Object} options - Object containing the options for the security watchdog
-   * @param {number} [options.interval=3000] - Interval in milliseconds between each security check
-   * @param {string} [options.protectionMode='LOG_ONLY'] - Protection mode to use. Can be either 'LOG_ONLY' or 'TERMINATE'
+   * @param options.interval Milliseconds between checks (default 3000, native minimum 100).
+   * @param options.protectionMode `LOG_ONLY`, `THROW_EXCEPTION` or `TERMINATE`; unknown values
+   *     fall back to `LOG_ONLY`.
+   * @returns Nothing (`void`).
    */
   startSecurityWatchdog(options: {
     interval?: number;
@@ -84,11 +63,36 @@ export interface Spec extends TurboModule {
   }): void;
 
   /**
-   * Stop runtime security watchdog
+   * Native: stops the runtime watchdog if it is running.
    *
-   * This method stops the runtime security watchdog if it is currently running.
+   * @returns Nothing (`void`).
    */
   stopSecurityWatchdog(): void;
+
+  /**
+   * Native: reports whether the watchdog loop is active.
+   *
+   * @returns Promise resolving to `true` while the watchdog runs.
+   */
+  isSecurityWatchdogRunning(): Promise<boolean>;
+
+  /**
+   * Required by `NativeEventEmitter`; called when JS subscribes to an event. Not meant to be
+   * called directly.
+   *
+   * @param eventName Name of the event being subscribed to (`onSecurityThreat`).
+   * @returns Nothing (`void`).
+   */
+  addListener(eventName: string): void;
+
+  /**
+   * Required by `NativeEventEmitter`; called when JS unsubscribes. Not meant to be called
+   * directly.
+   *
+   * @param count Number of listeners removed.
+   * @returns Nothing (`void`).
+   */
+  removeListeners(count: number): void;
 }
 
 /**
