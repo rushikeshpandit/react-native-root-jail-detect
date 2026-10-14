@@ -1,16 +1,56 @@
 import Foundation
 import UIKit
 
-  /// JailbreakChecker
-  ///
-  /// Performs filesystem and system checks commonly used
-  /// to detect jailbroken iOS devices.
+/// Detects jailbreak artifacts: known files, a writable system location, jailbreak URL schemes
+/// and restricted paths.
 class JailbreakChecker: DetectionRule {
+
+  private let fileExists: (String) -> Bool
+  private let canWriteFile: (String) -> Bool
+  private let canOpenURL: (URL) -> Bool
+  private let pathAccessible: (String) -> Bool
+  private let skipFileChecks: Bool
+
+  /// Creates the checker. Defaults use the real system; each dependency can be replaced for
+  /// tests.
+  ///
+  /// - Parameters:
+  ///   - fileExists: Tells whether a path exists.
+  ///   - canWriteFile: Tries to write and delete a probe file at a path.
+  ///   - canOpenURL: Asks UIKit whether a URL can be opened.
+  ///   - pathAccessible: Tells whether `stat` succeeds on a path.
+  ///   - skipFileChecks: Skips the file-existence check; true on the simulator, where host
+  ///   files would false-positive.
+  init(
+    fileExists: @escaping (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+    canWriteFile: @escaping (String) -> Bool = JailbreakChecker.systemCanWrite,
+    canOpenURL: @escaping (URL) -> Bool = JailbreakChecker.systemCanOpen,
+    pathAccessible: @escaping (String) -> Bool = JailbreakChecker.systemPathAccessible,
+    skipFileChecks: Bool = JailbreakChecker.isSimulatorBuild
+  ) {
+    self.fileExists = fileExists
+    self.canWriteFile = canWriteFile
+    self.canOpenURL = canOpenURL
+    self.pathAccessible = pathAccessible
+    self.skipFileChecks = skipFileChecks
+  }
+
+#if targetEnvironment(simulator)
+  static let isSimulatorBuild = true
+#else
+  static let isSimulatorBuild = false
+#endif
   
+  /// Whether any jailbreak indicator is present.
+  ///
+  /// - Returns: `true` if `getReasons()` is not empty.
   func isDeviceJailbroken() -> Bool {
     return !getReasons().isEmpty
   }
   
+  /// Runs all jailbreak heuristics.
+  ///
+  /// - Returns: One message per positive heuristic; empty on a clean device.
   func getReasons() -> [String] {
     
     var reasons: [String] = []
@@ -34,27 +74,45 @@ class JailbreakChecker: DetectionRule {
     return reasons
   }
   
-    /// Detect known jailbreak files
+  /// Looks for the known jailbreak files, unless file checks are skipped.
+  ///
+  /// - Returns: `true` if one exists.
   private func hasJailbreakFiles() -> Bool {
-#if targetEnvironment(simulator)
-      // SSH paths are macOS host paths — skip entirely on simulator
-    return false
-#else
-    for path in SecurityConstants.jailbreakFilePaths {
-      if FileManager.default.fileExists(atPath: path) {
-        return true
-      }
-    }
-    
-    return false
-#endif
+    if skipFileChecks { return false }
+    return SecurityConstants.jailbreakFilePaths.contains { fileExists($0) }
   }
-  
-    /// Attempt write in protected directory
+
+  /// Tries to write `/private/jb_test.txt`, which only succeeds outside the sandbox.
+  ///
+  /// - Returns: `true` if the write succeeded.
   private func canWriteRestrictedDirectory() -> Bool {
-    
-    let path = "/private/jb_test.txt"
-    
+    return canWriteFile("/private/jb_test.txt")
+  }
+
+  /// Checks whether Cydia/Sileo/Zebra-style URL schemes are registered.
+  ///
+  /// - Returns: `true` if any scheme can be opened.
+  private func canOpenJailbreakSchemes() -> Bool {
+    return SecurityConstants.jailbreakURLSchemes.contains { scheme in
+      guard let url = URL(string: scheme) else { return false }
+      return canOpenURL(url)
+    }
+  }
+
+  /// Checks whether restricted system paths are visible to the sandboxed app.
+  ///
+  /// - Returns: `true` if any path is accessible.
+  private func canAccessRestrictedPaths() -> Bool {
+    return SecurityConstants.restrictedPaths.contains { pathAccessible($0) }
+  }
+
+  // MARK: - System implementations
+
+  /// Production implementation of the write probe; the probe file is removed again.
+  ///
+  /// - Parameter path: File path to write.
+  /// - Returns: `true` if writing and deleting succeeded.
+  static func systemCanWrite(_ path: String) -> Bool {
     do {
       try "test".write(toFile: path, atomically: true, encoding: .utf8)
       try FileManager.default.removeItem(atPath: path)
@@ -63,36 +121,24 @@ class JailbreakChecker: DetectionRule {
       return false
     }
   }
-  
-    /// Detect jailbreak URL schemes
-  private func canOpenJailbreakSchemes() -> Bool {
-    
+
+  /// Production implementation of the URL-scheme probe, using `UIApplication.canOpenURL`.
+  ///
+  /// - Parameter url: URL whose scheme is tested.
+  /// - Returns: `true` if it can be opened; `false` when no shared application is available.
+  static func systemCanOpen(_ url: URL) -> Bool {
     guard let app = UIApplication.value(forKey: "sharedApplication") as? UIApplication else {
       return false
     }
-    
-    for scheme in SecurityConstants.jailbreakURLSchemes {
-      
-      if let url = URL(string: scheme), app.canOpenURL(url) {
-        return true
-      }
-    }
-    
-    return false
+    return app.canOpenURL(url)
   }
-  
-    /// Detect restricted paths
-  private func canAccessRestrictedPaths() -> Bool {
-    
-    for path in SecurityConstants.restrictedPaths {
-      
-      var statInfo = stat()
-      
-      if stat(path, &statInfo) == 0 {
-        return true
-      }
-    }
-    
-    return false
+
+  /// Production implementation of the path probe, using `stat`.
+  ///
+  /// - Parameter path: Path to test.
+  /// - Returns: `true` if `stat` succeeds.
+  static func systemPathAccessible(_ path: String) -> Bool {
+    var statInfo = stat()
+    return stat(path, &statInfo) == 0
   }
 }

@@ -1,5 +1,10 @@
 package com.rootjaildetect.constants
 
+/**
+ * Data used by the Android checkers: root packages, su directories, dangerous properties,
+ * cloaking files, emulator files/properties and Frida library names. Paths that are joined with
+ * a file name end in `/`.
+ */
 object SecurityConstants {
     /**
      * List of well-known root management applications.

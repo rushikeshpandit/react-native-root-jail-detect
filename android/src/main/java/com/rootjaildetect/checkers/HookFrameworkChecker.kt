@@ -1,11 +1,27 @@
 package com.rootjaildetect.checkers
 
 /**
- * HookFrameworkChecker
+ * Detects runtime hooking frameworks such as Xposed.
  *
- * Detects runtime method hooking frameworks such as Xposed.
+ * @param classExists Tells whether a class can be loaded.
+ * @param stackTrace Supplies the current stack trace.
  */
-class HookFrameworkChecker {
+class HookFrameworkChecker(
+    private val classExists: (String) -> Boolean = {
+        try {
+            Class.forName(it)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    },
+    private val stackTrace: () -> Array<StackTraceElement> = { Throwable().stackTrace },
+) {
+    /**
+     * Runs both hook checks.
+     *
+     * @return One message per positive check; empty when clean.
+     */
     fun getReasons(): List<String> {
         val reasons = mutableListOf<String>()
 
@@ -20,16 +36,22 @@ class HookFrameworkChecker {
         return reasons
     }
 
+    /**
+     * Tries to load `XposedBridge`.
+     *
+     * @return `true` if the class is present.
+     */
     fun detectXposed(): Boolean =
-        try {
-            Class.forName("de.robv.android.xposed.XposedBridge")
-            true
-        } catch (_: Exception) {
-            false
-        }
+        classExists("de.robv.android.xposed.XposedBridge")
 
+    /**
+     * Looks for `xposed` or `frida` in class names of the current stack trace
+     * (case-insensitive).
+     *
+     * @return `true` if any frame matches.
+     */
     fun detectStack(): Boolean =
-        Throwable().stackTrace.any {
+        stackTrace().any {
             it.className.contains("xposed", true) ||
                 it.className.contains("frida", true)
         }

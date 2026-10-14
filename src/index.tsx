@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { NativeEventEmitter, Platform } from 'react-native';
 import RootJailDetect from './NativeRootJailDetect';
 
 export enum ProtectionMode {
@@ -12,10 +12,32 @@ export interface SecurityWatchdogOptions {
   protectionMode?: ProtectionMode;
 }
 
+export interface SecurityThreatEvent {
+  /** Human-readable reasons the watchdog flagged the device */
+  reasons: string[];
+  /** Detection time, in milliseconds since the Unix epoch */
+  timestamp: number;
+}
+
+export interface SecurityThreatSubscription {
+  remove(): void;
+}
+
+const THREAT_EVENT = 'onSecurityThreat';
+
+let emitter: NativeEventEmitter | null = null;
+
 /**
- * Checks if the device is compromised (rooted on Android, jailbroken on iOS)
- * @returns {Promise<boolean>} A promise that resolves
- * to true if the device is compromised, false otherwise
+ * Checks whether the device is compromised: rooted on Android, jailbroken on iOS.
+ *
+ * Runs every native heuristic (root/jailbreak artifacts, Frida, hooking frameworks,
+ * ptrace/tracer checks, inline hooks) and combines them. Emulators/simulators and
+ * attached debuggers on their own do NOT make this return true; use `isEmulator()` and
+ * `isDebuggerAttached()` for those.
+ *
+ * @returns Promise that resolves to `true` if any compromise indicator was found, `false`
+ *     otherwise. The value is coerced with `Boolean()`. The promise REJECTS (after logging with
+ *     console.error) when the native check itself fails.
  */
 export async function isDeviceCompromised(): Promise<boolean> {
   try {
@@ -28,9 +50,13 @@ export async function isDeviceCompromised(): Promise<boolean> {
 }
 
 /**
- * Checks if the app is running in an emulator/simulator
- * @returns {Promise<boolean>} A promise that resolves
- * to true if running in emulator/simulator, false otherwise
+ * Checks whether the app runs inside an emulator (Android) or a simulator (iOS).
+ *
+ * Calls the native `isEmulator` on Android and `isSimulator` on iOS. Never rejects.
+ *
+ * @returns Promise that resolves to `true` when running on an emulator/simulator. Resolves to
+ *     `false` on a real device, on unsupported platforms, when the native method is
+ *     unavailable, or when the native call throws (the error is logged).
  */
 export async function isEmulator(): Promise<boolean> {
   try {
@@ -47,9 +73,15 @@ export async function isEmulator(): Promise<boolean> {
 }
 
 /**
- * Checks if a debugger is attached to the app
- * @returns {Promise<boolean>} A promise that resolves
- * to true if a debugger is attached, false otherwise
+ * Checks whether a debugger is attached to the app process.
+ *
+ * Android combines the Java debugger flag, wait-for-debugger state and `TracerPid`; iOS reads
+ * the
+ * `P_TRACED` flag via sysctl. On iOS debug builds the check is skipped (Xcode always attaches a
+ * debugger) and returns `false`. Never rejects.
+ *
+ * @returns Promise that resolves to `true` when a debugger is attached, otherwise `false` (also
+ *     `false` if the native method is unavailable or throws; the error is logged).
  */
 export async function isDebuggerAttached(): Promise<boolean> {
   try {
@@ -74,6 +106,16 @@ export async function isDebuggerAttached(): Promise<boolean> {
  *          is compromised, empty otherwise
  */
 
+/**
+ * Returns human-readable explanations for everything the native checkers flagged.
+ *
+ * The list also contains emulator/simulator and debugger findings, so it can be non-empty even
+ * when `isDeviceCompromised()` is `false`. Duplicates are removed natively. Never rejects.
+ *
+ * @returns Promise that resolves to an array of reason strings (for example `"Magisk
+ *     detected"`). Resolves to `[]` when nothing was found, when the native method is
+ *     unavailable, or when the call throws (the error is logged).
+ */
 export async function getDetectionReasons(): Promise<string[]> {
   try {
     if (RootJailDetect.getDetectionReasons) {
@@ -84,23 +126,27 @@ export async function getDetectionReasons(): Promise<string[]> {
       return [];
     }
   } catch (error) {
-    console.error('Error checking debugger status:', error);
+    console.error('Error getting detection reasons:', error);
     return [];
   }
 }
 
 /**
- * Starts the runtime security watchdog with the specified interval and protection mode.
+ * Starts the runtime security watchdog.
  *
- * @param {SecurityWatchdogOptions} [options] - Object containing the options for the security watchdog
- * @param {number} [options.interval=3000] - Interval in milliseconds between each security check
- * @param {string} [options.protectionMode='LOG_ONLY'] - Protection mode to use. Can be either 'LOG_ONLY' or 'TERMINATE'
+ * The watchdog re-runs the compromise and debugger checks on a randomised interval (+-40%) in a
+ * background thread, and treats an abnormally long gap between iterations as a debugger pause.
+ * On a threat it notifies `addSecurityThreatListener` subscribers and then applies the
+ * protection
+ * mode. Calling this while the watchdog already runs is a no-op (the running configuration is
+ * kept).
+ * Native code clamps the interval to a minimum of 100 ms.
  *
- * @example
- * RootJailDetect.startSecurityWatchdog({
- *   interval: 5000,
- *   protectionMode: "TERMINATE"
- * })
+ * @param options Optional configuration object.
+ * @param options.interval Milliseconds between checks. Defaults to `3000`.
+ * @param options.protectionMode What to do on a threat: `LOG_ONLY` (default), `THROW_EXCEPTION`
+ *     (crashes the app) or `TERMINATE` (kills the process).
+ * @returns Nothing (`void`). Native errors are not caught and propagate to the caller.
  */
 export function startSecurityWatchdog(
   options: SecurityWatchdogOptions = {}
@@ -112,13 +158,58 @@ export function startSecurityWatchdog(
 }
 
 /**
- * Stop runtime watchdog
+ * Stops the runtime security watchdog. Safe to call when it is not running; any in-flight
+ * iteration finishes, then the background loop exits.
  *
- * @example
- * RootJailDetect.stopSecurityWatchdog()
+ * @returns Nothing (`void`).
  */
 export function stopSecurityWatchdog(): void {
   RootJailDetect.stopSecurityWatchdog();
+}
+
+/**
+ * Reports whether the security watchdog is currently running. Never rejects.
+ *
+ * @returns Promise that resolves to `true` while the watchdog runs, `false` otherwise (also
+ *     `false` if the native method is unavailable or throws; the error is logged).
+ */
+export async function isSecurityWatchdogRunning(): Promise<boolean> {
+  try {
+    if (RootJailDetect.isSecurityWatchdogRunning) {
+      return Boolean(await RootJailDetect.isSecurityWatchdogRunning());
+    }
+    return false;
+  } catch (error) {
+    console.error('Error checking watchdog status:', error);
+    return false;
+  }
+}
+
+/**
+ * Subscribes to threats found by the security watchdog (event `onSecurityThreat`).
+ *
+ * The listener fires in every protection mode, before the protection action runs. With
+ * `TERMINATE` the process may die before JavaScript receives the event. The underlying
+ * `NativeEventEmitter` is created lazily on first use.
+ *
+ * @param listener Callback invoked with a `SecurityThreatEvent` (`reasons` and a millisecond
+ *     `timestamp`) for every detected threat.
+ * @returns A subscription whose `remove()` unsubscribes the listener. Throws a `TypeError` if
+ *     `listener` is not a function.
+ */
+export function addSecurityThreatListener(
+  listener: (event: SecurityThreatEvent) => void
+): SecurityThreatSubscription {
+  if (typeof listener !== 'function') {
+    throw new TypeError('addSecurityThreatListener expects a function');
+  }
+  if (!emitter) {
+    emitter = new NativeEventEmitter(RootJailDetect as any);
+  }
+  const subscription = emitter.addListener(THREAT_EVENT, (event: any) =>
+    listener(event as SecurityThreatEvent)
+  );
+  return { remove: () => subscription.remove() };
 }
 
 export type { RootJailDetect };
@@ -129,4 +220,6 @@ export default {
   getDetectionReasons,
   startSecurityWatchdog,
   stopSecurityWatchdog,
+  isSecurityWatchdogRunning,
+  addSecurityThreatListener,
 };

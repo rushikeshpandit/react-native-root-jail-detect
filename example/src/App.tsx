@@ -17,6 +17,12 @@ import {
 } from 'react-native-root-jail-detect';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+/**
+ * Demo screen. Runs every detection on mount and shows the results (compromised,
+ * emulator/simulator, debugger and the list of reasons), with a button to run them again.
+ *
+ * @returns The screen element.
+ */
 function App() {
   const [loading, setLoading] = useState(true);
   const [isCompromised, setIsCompromised] = useState<boolean | null>(null);
@@ -24,6 +30,13 @@ function App() {
   const [isDebugger, setIsDebugger] = useState<boolean | null>(null);
   const [detectionReasons, setDetectionReasons] = useState<string[]>([]);
 
+  /**
+   * Runs all four detections in parallel, stores the results in state and shows an alert if the
+   * device is compromised or a check fails. Toggles the loading indicator around the work.
+   *
+   * @returns A promise that resolves when the state has been updated; it never rejects (errors
+   *     are caught and alerted).
+   */
   const checkDeviceSecurity = async () => {
     setLoading(true);
     try {
@@ -63,11 +76,24 @@ function App() {
     checkDeviceSecurity();
   }, []);
 
+  /**
+   * Chooses the badge colour for a result.
+   *
+   * @param value Detection result, or `null` while it is still being computed.
+   * @returns Grey (`#999`) for `null`, red (`#ff4444`) for `true`, green (`#00C851`) for
+   *     `false`.
+   */
   const getStatusColor = (value: boolean | null) => {
     if (value === null) return '#999';
     return value ? '#ff4444' : '#00C851';
   };
 
+  /**
+   * Chooses the badge label for a result.
+   *
+   * @param value Detection result, or `null` while it is still being computed.
+   * @returns `'Checking...'` for `null`, `'YES'` for `true`, `'NO'` for `false`.
+   */
   const getStatusText = (value: boolean | null) => {
     if (value === null) return 'Checking...';
     return value ? 'YES' : 'NO';

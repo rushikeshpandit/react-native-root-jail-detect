@@ -1,5 +1,4 @@
 #include <jni.h>
-#include <sys/ptrace.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fstream>
@@ -9,32 +8,40 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/syscall.h>
+
+#include "scan_utils.h"
 
 
 // Reads TracerPid from /proc/self/status.
 // Returns 0 if not traced, >0 if a debugger is attached, -1 on error.
+/**
+ * Reads the `TracerPid` field of `/proc/self/status`.
+ *
+ * @return The tracer's pid (0 when not traced, greater than 0 when a debugger is attached), or
+ *     -1 if the file cannot be read or the field is missing/malformed.
+ */
 static int getTracerPid() {
     std::ifstream status("/proc/self/status");
     if (!status.is_open()) return -1;
 
     std::string line;
     while (std::getline(status, line)) {
-        if (line.rfind("TracerPid:", 0) == 0) {
-            try {
-                return std::stoi(line.substr(10));
-            } catch (...) {
-                return -1;
-            }
-        }
+        int pid = rjd::parseTracerPid(line);
+        if (pid != -1 || line.rfind("TracerPid:", 0) == 0) return pid;
     }
     return -1;
 }
 
 /**
- * ptrace anti-debug detection
+ * JNI: reports whether another process is ptrace-attached to this one. Reads `TracerPid` only
+ * and deliberately avoids `ptrace(PTRACE_TRACEME)`, whose side effect cannot be undone and
+ * would make later calls report a debugger.
  *
- * If ptrace fails it means another debugger
- * already attached to the process.
+ * @param env JNI environment (unused).
+ * @param thiz The `NativeSecurityChecker` instance (unused).
+ * @return `JNI_TRUE` if `TracerPid` is greater than 0, otherwise `JNI_FALSE`.
  */
 extern "C"
 JNIEXPORT jboolean JNICALL
@@ -42,37 +49,16 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectPtrace(
         JNIEnv *env,
         jobject thiz) {
 
-    // Primary check: /proc/self/status TracerPid
-    // A non-zero TracerPid reliably means a debugger is attached.
-    int tracerPid = getTracerPid();
-    if (tracerPid > 0) {
-        return JNI_TRUE;
-    }
-
-    // Secondary check: ptrace TRACEME
-    // Only treat EPERM as a definitive "already being traced" signal.
-    // Other errno values (ENOSYS, EPERM from SELinux) are ambiguous — skip them.
-    errno = 0;
-    if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
-        if (errno == EPERM) {
-            // Confirm with TracerPid before flagging, to avoid SELinux false positives
-            return (tracerPid > 0) ? JNI_TRUE : JNI_FALSE;
-        }
-        // Other errors (ENOSYS etc.) = not debugger-related
-        return JNI_FALSE;
-    }
-
-    // Successfully attached to self — no debugger present. Clean up.
-    ptrace(PTRACE_DETACH, 0, NULL, NULL);
-    return JNI_FALSE;
+    return getTracerPid() > 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 /**
- * Detect Frida using native techniques
+ * JNI: scans `/proc/self/maps` through libc for Frida markers (`frida`, `gum-js-loop`,
+ * `linjector`).
  *
- * Methods used:
- * - scan /proc/self/maps
- * - scan loaded libraries
+ * @param env JNI environment (unused).
+ * @param thiz The `NativeSecurityChecker` instance (unused).
+ * @return `JNI_TRUE` if a marker is found, otherwise `JNI_FALSE`.
  */
 extern "C"
 JNIEXPORT jboolean JNICALL
@@ -84,12 +70,7 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectFridaNative(
     std::string line;
 
     while (std::getline(maps, line)) {
-
-        if (line.find("frida") != std::string::npos ||
-            line.find("gum-js-loop") != std::string::npos ||
-            line.find("gmain") != std::string::npos ||
-            line.find("linjector") != std::string::npos) {
-
+        if (rjd::containsFridaMarker(line)) {
             return JNI_TRUE;
         }
     }
@@ -100,6 +81,13 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectFridaNative(
 // Returns the memory protection flags (PROT_* bitmask) of the mapping that
 // contains `addr`, or -1 if it cannot be determined. Parsed from the perms
 // column of /proc/self/maps (e.g. "r-xp").
+/**
+ * Looks up the memory protection of the mapping containing an address by parsing the permission
+ * column of `/proc/self/maps`.
+ *
+ * @param addr Address to look up.
+ * @return A `PROT_*` bit mask, or -1 if the mapping cannot be found.
+ */
 static int getPageProtection(uintptr_t addr) {
     std::ifstream maps("/proc/self/maps");
     if (!maps.is_open()) return -1;
@@ -137,6 +125,16 @@ static int getPageProtection(uintptr_t addr) {
 // permanently weakened. On Android 11+ (already readable) no protection change
 // is made. Returns false — rather than risking a crash — whenever the page
 // cannot be confirmed readable.
+/**
+ * Copies bytes out of code memory without crashing. Android 10 maps libc execute-only, so
+ * reading it raises SIGSEGV; the page is temporarily made readable and its original protection
+ * restored afterwards.
+ *
+ * @param src Source address (possibly execute-only).
+ * @param dst Destination buffer.
+ * @param len Number of bytes to copy.
+ * @return `true` if the bytes were copied, `false` if the page could not be confirmed readable.
+ */
 static bool safeRead(const void *src, void *dst, size_t len) {
     uintptr_t addr = reinterpret_cast<uintptr_t>(src);
     long pageSize = sysconf(_SC_PAGESIZE);
@@ -161,9 +159,14 @@ static bool safeRead(const void *src, void *dst, size_t len) {
     return true;
 }
 
-/*
- * Detect inline hooks inside libc
- * Used by Frida and Xposed
+/**
+ * JNI: reads the first instruction of libc `open` and checks for an inline-hook trampoline
+ * (arm64: `B` or `LDR X16/X17`; arm32: `B`/`BL`; Thumb functions are skipped).
+ *
+ * @param env JNI environment (unused).
+ * @param thiz The `NativeSecurityChecker` instance (unused).
+ * @return `JNI_TRUE` if the prologue looks patched, otherwise `JNI_FALSE` (also when libc or
+ *     the symbol cannot be loaded or read).
  */
 extern "C"
 JNIEXPORT jboolean JNICALL
@@ -210,14 +213,9 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectInlineHook(
                     (static_cast<uint32_t>(code[1]) << 8) |
                     (static_cast<uint32_t>(code[2]) << 16) |
                     (static_cast<uint32_t>(code[3]) << 24);
-    // Unconditional branch: B <imm26>, opcode bits [31:26] == 0b000101.
-    if ((insn & 0xFC000000u) == 0x14000000u) hooked = true;
-    // Absolute-jump trampoline: LDR X16/X17, <literal> (0x58...) followed by
-    // BR — a very common Frida/Xposed prologue shape.
-    if ((insn & 0xFF000000u) == 0x58000000u &&
-        ((insn & 0x1Fu) == 16u || (insn & 0x1Fu) == 17u)) {
-        hooked = true;
-    }
+    // Unconditional B, or the LDR X16/X17 + BR absolute-jump trampoline that
+    // Frida/Xposed commonly write over a prologue.
+    hooked = rjd::isArm64HookPrologue(insn);
 #elif defined(__arm__)
     // ARM (32-bit): the first instruction becomes an unconditional B (0xEA)
     // or BL (0xEB). A32 instructions are stored little-endian, so the
@@ -229,8 +227,14 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectInlineHook(
     return hooked ? JNI_TRUE : JNI_FALSE;
 }
 
-/*
- * Detect Frida using syscall behaviour
+/**
+ * JNI: scans `/proc/self/maps` using raw `openat`/`read` syscalls in 4 KiB chunks (with an
+ * overlap so markers split across chunks are found). Because libc is bypassed, it still sees
+ * Frida when libc `open`/`read` are hooked to hide it.
+ *
+ * @param env JNI environment (unused).
+ * @param thiz The `NativeSecurityChecker` instance (unused).
+ * @return `JNI_TRUE` if a Frida marker is found, otherwise `JNI_FALSE`.
  */
 extern "C"
 JNIEXPORT jboolean JNICALL
@@ -238,25 +242,31 @@ Java_com_rootjaildetect_checkers_NativeSecurityChecker_detectFridaSyscall(
         JNIEnv *env,
         jobject thiz) {
 
-    FILE *fp = fopen("/proc/self/status", "r");
+    long fd = syscall(__NR_openat, AT_FDCWD, "/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return JNI_FALSE;
 
-    if (!fp) return JNI_FALSE;
+    // Read in chunks and keep a tail so a marker split across two reads is still found.
+    const size_t kChunk = 4096;
+    const size_t kOverlap = 32;
+    char buf[kChunk];
+    std::string window;
+    bool found = false;
 
-    char line[256];
+    while (!found) {
+        long n = syscall(__NR_read, static_cast<int>(fd), buf, kChunk);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
 
-    while (fgets(line, sizeof(line), fp)) {
-
-        if (strstr(line, "TracerPid")) {
-
-            int tracer = atoi(line + 10);
-
-            if (tracer != 0) {
-                fclose(fp);
-                return JNI_TRUE;
-            }
+        window.append(buf, static_cast<size_t>(n));
+        if (rjd::containsFridaMarker(window)) {
+            found = true;
+            break;
+        }
+        if (window.size() > kOverlap) {
+            window.erase(0, window.size() - kOverlap);
         }
     }
 
-    fclose(fp);
-    return JNI_FALSE;
+    syscall(__NR_close, static_cast<int>(fd));
+    return found ? JNI_TRUE : JNI_FALSE;
 }
