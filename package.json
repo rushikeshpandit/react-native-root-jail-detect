@@ -192,7 +192,7 @@
     "test:native": "mkdir -p .build && clang++ -std=c++17 -Wall -Wextra android/src/test/cpp/scan_utils_test.cpp -o .build/scan_utils_test && .build/scan_utils_test"
   },
   "types": "./lib/typescript/src/index.d.ts",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "workspaces": [
     "example"
   ]
