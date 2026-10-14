@@ -84,3 +84,7 @@ android/generated
 
 # React Native Nitro Modules
 nitrogen/
+
+# SwiftPM (test package)
+.build/
+.swiftpm/
