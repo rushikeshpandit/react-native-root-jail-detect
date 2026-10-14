@@ -1,37 +1,58 @@
 import Darwin
 import Foundation
 
-  /// DebuggerChecker
-  ///
-  /// Detects debugger attachment using sysctl.
+/// Detects an attached debugger through the `P_TRACED` flag read with sysctl.
 class DebuggerChecker: DetectionRule {
-  
-  func isDebuggerAttached() -> Bool {
+
+  private let skipInDebugBuild: Bool
+  private let isTraced: () -> Bool
+
 #if DEBUG
-      // Skip all debugger detection in debug builds.
-      // Xcode always attaches LLDB when running via cable — these will
-      // always fire and are meaningless in development.
-    return false
+  static let isDebugBuild = true
+#else
+  static let isDebugBuild = false
 #endif
+
+  /// Creates the checker; defaults use the real build configuration and sysctl.
+  ///
+  /// - Parameters:
+  ///   - skipInDebugBuild: When true, detection is disabled (true in DEBUG builds, where Xcode
+  ///   attaches a debugger).
+  ///   - isTraced: Returns whether the process is traced.
+  init(
+    skipInDebugBuild: Bool = DebuggerChecker.isDebugBuild,
+    isTraced: @escaping () -> Bool = DebuggerChecker.systemIsTraced
+  ) {
+    self.skipInDebugBuild = skipInDebugBuild
+    self.isTraced = isTraced
+  }
+  
+  /// Whether a debugger is attached.
+  ///
+  /// - Returns: `false` when skipped for debug builds, otherwise `true` if `getReasons()` is
+  ///   not empty.
+  func isDebuggerAttached() -> Bool {
+    if skipInDebugBuild { return false }
     return !getReasons().isEmpty
   }
   
+  /// Reports the debugger if the process is traced.
+  ///
+  /// - Returns: `["Debugger attached via sysctl"]` or an empty list (also empty when skipped).
   func getReasons() -> [String] {
-#if DEBUG
-      // Skip all debugger detection in debug builds.
-      // Xcode always attaches LLDB when running via cable — these will
-      // always fire and are meaningless in development.
-    return []
-#endif
+    if skipInDebugBuild { return [] }
     
-    if checkDebugger() {
+    if isTraced() {
       return ["Debugger attached via sysctl"]
     }
     
     return []
   }
   
-  private func checkDebugger() -> Bool {
+  /// Reads `kinfo_proc.p_flag` for the current process with sysctl. Has no side effects.
+  ///
+  /// - Returns: `true` if `P_TRACED` is set; `false` if it is clear or sysctl fails.
+  static func systemIsTraced() -> Bool {
     var name: [Int32] = [
       CTL_KERN,
       KERN_PROC,

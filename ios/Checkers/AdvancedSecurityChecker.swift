@@ -19,19 +19,41 @@ import ObjectiveC.runtime
   /// - Frida runtime traps
   ///
 
-@_silgen_name("ptrace")
-func ptrace(
-  _ request: Int32,
-  _ pid: Int32,
-  _ addr: UnsafeMutableRawPointer?,
-  _ data: Int32
-) -> Int32
-
+/// Low-level anti-tamper checks: tracer state, DYLD injection, Frida in memory, Mach exception
+/// ports, inline hooks, code integrity, method swizzling and Frida runtime symbols.
 class AdvancedSecurityChecker: DetectionRule {
-  private let PT_DENY_ATTACH: Int32 = 31
-  private let PT_TRACE_ME: Int32 = 0
-  private let PT_DETACH: Int32 = 11
+
+  private let environment: () -> [String: String]
+  private let imageNames: () -> [String]
+  private let skipDyldCheck: Bool
+
+#if DEBUG
+  static let isDebugBuild = true
+#else
+  static let isDebugBuild = false
+#endif
+
+  /// Creates the checker; defaults use the real process.
+  ///
+  /// - Parameters:
+  ///   - environment: Supplies the process environment.
+  ///   - imageNames: Names of loaded dyld images.
+  ///   - skipDyldCheck: Disables the DYLD check (true in DEBUG builds, where Xcode sets DYLD
+  ///   variables).
+  init(
+    environment: @escaping () -> [String: String] = { ProcessInfo.processInfo.environment },
+    imageNames: @escaping () -> [String] = FridaChecker.systemImageNames,
+    skipDyldCheck: Bool = AdvancedSecurityChecker.isDebugBuild
+  ) {
+    self.environment = environment
+    self.imageNames = imageNames
+    self.skipDyldCheck = skipDyldCheck
+  }
+
   
+  /// Runs every advanced check.
+  ///
+  /// - Returns: One message per positive check; empty when clean.
   func getReasons() -> [String] {
     
     var reasons: [String] = []
@@ -73,56 +95,49 @@ class AdvancedSecurityChecker: DetectionRule {
   
     // MARK: - ptrace Anti Debug
   
+  /// Reports whether the process is being traced, using the side-effect-free sysctl flag (the
+  /// old `PT_TRACE_ME` probe left the process traced).
+  ///
+  /// - Returns: `true` if `P_TRACED` is set.
   func detectPtrace() -> Bool {
-      // If a debugger is already attached, PTRACE_TRACEME fails with EPERM
-    if ptrace(PT_TRACE_ME, 0, nil, 0) == -1 {
-      return errno == EPERM
-    }
-      // Successfully self-traced — no debugger present, detach cleanly
-    ptrace(PT_DETACH, 0, nil, 0)
-    return false
+    return DebuggerChecker.systemIsTraced()
   }
-  
+
     // MARK: - DYLD Injection Detection
   
+  /// Looks for `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` or `DYLD_FRAMEWORK_PATH`.
+  ///
+  /// - Returns: `true` if one is set; always `false` when skipped for debug builds.
   func detectDYLDInjection() -> Bool {
-#if DEBUG
-      // DYLD vars are legitimately set by Xcode tooling in debug builds
-    return false
-#else
-    let env = ProcessInfo.processInfo.environment
+    // DYLD vars are legitimately set by Xcode tooling in debug builds
+    if skipDyldCheck { return false }
+    let env = environment()
     let suspicious = [
       "DYLD_INSERT_LIBRARIES",
       "DYLD_LIBRARY_PATH",
       "DYLD_FRAMEWORK_PATH",
     ]
     return suspicious.contains { env[$0] != nil }
-#endif
   }
-  
+
     // MARK: - Frida Memory Detection
   
+  /// Looks for `frida`, `gum-js` or `linjector` in loaded image names.
+  ///
+  /// - Returns: `true` if one is loaded.
   func detectFridaMemory() -> Bool {
-    
-    for i in 0..<_dyld_image_count() {
-      
-      guard let image = _dyld_get_image_name(i) else {
-        continue
-      }
-      
-      let name = String(cString: image).lowercased()
-      
-      if name.contains("frida") || name.contains("gum-js") || name.contains("linjector") {
-        
-        return true
-      }
+    return imageNames().contains { image in
+      let name = image.lowercased()
+      return name.contains("frida") || name.contains("gum-js") || name.contains("linjector")
     }
-    
-    return false
   }
-  
+
     // MARK: - Mach Exception Debugger
   
+  /// Looks for a debugger-owned breakpoint exception port with `task_get_exception_ports`.
+  /// Disabled in DEBUG builds.
+  ///
+  /// - Returns: `true` if a valid port is registered.
   func detectMachExceptionPort() -> Bool {
 #if DEBUG
       // Skip all debugger detection in debug builds.
@@ -173,20 +188,75 @@ class AdvancedSecurityChecker: DetectionRule {
   
     // MARK: - Inline Hook Detection
   
+  /// Checks whether `open` starts with a branch that leaves its own image (trampoline into
+  /// injected code). arm64 only.
+  ///
+  /// - Returns: `true` if the prologue looks hooked; `false` on other architectures or when
+  ///   `open` cannot be resolved.
   func detectInlineHook() -> Bool {
+#if arch(arm64)
     guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "open") else {
       return false
     }
-      // Read the first 4 bytes (one ARM64 instruction)
-    let ptr = symbol.assumingMemoryBound(to: UInt32.self)
-    let instruction = ptr.pointee
-      // ARM64 unconditional branch: opcode top 6 bits = 0b000101 (B) or 0b100101 (BL)
-    let opcode = instruction >> 26
-    return opcode == 0x05 || opcode == 0x25
+    let instruction = symbol.assumingMemoryBound(to: UInt32.self).pointee
+    return AdvancedSecurityChecker.isHookedPrologue(
+      instruction: instruction,
+      at: UInt(bitPattern: symbol),
+      imageBase: AdvancedSecurityChecker.systemImageBase
+    )
+#else
+    return false
+#endif
   }
-  
+
+  /// Decodes an arm64 `B` / `BL` instruction.
+  ///
+  /// - Parameters:
+  ///   - instruction: 32-bit instruction word.
+  ///   - address: Address the instruction is located at.
+  /// - Returns: The branch destination, or nil if the instruction is not B/BL.
+  static func branchTarget(of instruction: UInt32, at address: UInt) -> UInt? {
+    let opcode = instruction >> 26
+    guard opcode == 0x05 || opcode == 0x25 else { return nil }
+    let offset = Int(Int32(bitPattern: instruction << 6) >> 6) * 4  // sign-extended imm26 * 4
+    return UInt(bitPattern: Int(bitPattern: address) &+ offset)
+  }
+
+  /// Decides whether a function prologue is an inline-hook trampoline.
+  ///
+  /// - Parameters:
+  ///   - instruction: First instruction of the function.
+  ///   - address: Address of the function.
+  ///   - imageBase: Maps an address to the base of its containing image, or nil if unmapped.
+  /// - Returns: `true` if the instruction branches to a different image or into unmapped
+  ///   memory.
+  static func isHookedPrologue(
+    instruction: UInt32,
+    at address: UInt,
+    imageBase: (UInt) -> UInt?
+  ) -> Bool {
+    guard let target = branchTarget(of: instruction, at: address) else { return false }
+    guard let targetBase = imageBase(target) else { return true }  // jumps into anonymous memory
+    return targetBase != imageBase(address)
+  }
+
+  /// Production `imageBase` implementation using `dladdr`.
+  ///
+  /// - Parameter address: Address to look up.
+  /// - Returns: Base address of the image containing it, or nil.
+  static func systemImageBase(_ address: UInt) -> UInt? {
+    var info = Dl_info()
+    guard dladdr(UnsafeRawPointer(bitPattern: address), &info) != 0,
+          let base = info.dli_fbase
+    else { return nil }
+    return UInt(bitPattern: base)
+  }
+
     // MARK: - Code Integrity Verification
   
+  /// Checks that every loaded image has a valid Mach-O magic number.
+  ///
+  /// - Returns: `true` if an image header is corrupt.
   func detectCodeIntegrityViolation() -> Bool {
     for i in 0..<_dyld_image_count() {
       guard let header = _dyld_get_image_header(i) else { continue }
@@ -199,6 +269,10 @@ class AdvancedSecurityChecker: DetectionRule {
   }
   
     // MARK: - Method Swizzling Detection
+  /// Verifies that key Foundation/ObjC methods are implemented inside the system libraries.
+  /// Disabled in DEBUG builds.
+  ///
+  /// - Returns: `true` if a method implementation lives elsewhere.
   func detectMethodSwizzling() -> Bool {
 #if DEBUG
       // Skip all debugger detection in debug builds.
@@ -284,6 +358,9 @@ class AdvancedSecurityChecker: DetectionRule {
   
     // MARK: - Frida Runtime Trap
   
+  /// Looks for Gum/Frida runtime symbols.
+  ///
+  /// - Returns: `true` if one resolves.
   func detectFridaRuntimeTrap() -> Bool {
     
     /*
