@@ -1,5 +1,6 @@
 import Foundation
 
+/// Data used by the iOS checkers: jailbreak file paths, URL schemes and restricted paths.
 struct SecurityConstants {
   
     // MARK: - Known Jailbreak File Paths
