@@ -7,26 +7,17 @@ import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
 
 /**
- * RootJailDetectPackage
- *
- * React Native package responsible for registering the
- * RootJailDetect native module with the React Native bridge.
- *
- * This class enables React Native to discover and load
- * the native security module at runtime.
+ * React Native package that registers the `RootJailDetect` TurboModule so autolinking can find
+ * it.
  */
 class RootJailDetectPackage : BaseReactPackage() {
     /**
-     * Creates and returns an instance of the requested native module.
+     * Creates the native module when React Native asks for it by name.
      *
-     * This method is invoked by the React Native runtime
-     * when it needs to load a native module.
-     *
-     * @param name Name of the requested native module
-     * @param reactContext React application context
-     *
-     * @return Instance of RootJailDetectModule if the name matches,
-     *         otherwise null
+     * @param name Module name requested by React Native.
+     * @param reactContext Application context handed to the module.
+     * @return A new `RootJailDetectModule` when `name` equals `RootJailDetectModule.NAME`,
+     *     otherwise `null`.
      */
     override fun getModule(
         name: String,
@@ -39,13 +30,10 @@ class RootJailDetectPackage : BaseReactPackage() {
         }
 
     /**
-     * Provides metadata information about the native module.
+     * Describes the module to React Native (TurboModule, lazily initialised, cannot override an
+     * existing module).
      *
-     * This information is used internally by React Native
-     * for module registration, initialization, and optimization,
-     * especially when using TurboModules.
-     *
-     * @return ReactModuleInfoProvider containing module configuration
+     * @return A provider mapping `RootJailDetectModule.NAME` to its `ReactModuleInfo`.
      */
     override fun getReactModuleInfoProvider(): ReactModuleInfoProvider =
         ReactModuleInfoProvider {
