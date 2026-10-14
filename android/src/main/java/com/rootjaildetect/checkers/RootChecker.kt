@@ -8,23 +8,34 @@ import com.rootjaildetect.utils.CommandExecutor
 import java.io.File
 
 /**
- * RootChecker
+ * Heuristics that detect a rooted Android device. Every external dependency is a constructor
+ * parameter so the logic can be unit-tested.
  *
- * Contains heuristics used to detect rooted devices.
+ * @param context Used to query installed packages.
+ * @param commandExecutor Runs a shell command and returns its stdout lines (defaults to
+ *     `CommandExecutor`).
+ * @param fileExists Tells whether a path exists (defaults to `File.exists`).
+ * @param buildTags Supplies `Build.TAGS`.
  */
 class RootChecker(
     private val context: Context,
+    private val commandExecutor: (String) -> List<String> = { CommandExecutor.execute(it) },
+    private val fileExists: (String) -> Boolean = { File(it).exists() },
+    private val buildTags: () -> String? = { Build.TAGS },
 ) {
     /**
-     * Determines whether the current device is rooted.
+     * Whether any root indicator is present.
      *
-     * Combines multiple independent detection techniques
-     * to improve accuracy and reduce false negatives.
-     *
-     * @return true if the device is likely rooted, false otherwise
+     * @return `true` if `getReasons()` is not empty.
      */
     fun isDeviceRooted(): Boolean = getReasons().isNotEmpty()
 
+    /**
+     * Runs all root heuristics (su binary, root apps, test-keys, su command, dangerous
+     * properties, writable /system, cloaking files, Magisk, KernelSU, Zygisk).
+     *
+     * @return One message per positive heuristic; empty on a clean device.
+     */
     fun getReasons(): List<String> {
         val reasons = mutableListOf<String>()
 
@@ -35,7 +46,7 @@ class RootChecker(
             reasons.add("Root management application detected")
         }
         if (hasTestKeys()) {
-            reasons.add("Root management application detected")
+            reasons.add("Test-keys build detected")
         }
         if (canExecuteSu()) {
             reasons.add("SU command executable")
@@ -63,19 +74,19 @@ class RootChecker(
     }
 
     /**
-     * Checks for the presence of the "su" binary in common directories.
+     * Looks for an `su` executable in the well-known directories.
      *
-     * Rooted devices usually expose this binary.
+     * @return `true` if one exists.
      */
     private fun hasSuBinary(): Boolean =
         SecurityConstants.SU_BINARY_DIRECTORIES.any {
-            File(it, "su").exists()
+            fileExists(it + "su")
         }
 
     /**
-     * Checks whether known root management applications are installed.
+     * Looks for known root-management packages (SuperSU, Magisk, KingRoot, ...).
      *
-     * Presence of these apps strongly indicates rooting.
+     * @return `true` if any is installed.
      */
     private fun hasRootAppsInstalled(): Boolean {
         SecurityConstants.ROOT_MANAGEMENT_PACKAGES.forEach { pkg ->
@@ -89,82 +100,113 @@ class RootChecker(
     }
 
     /**
-     * Verifies whether the device build contains "test-keys".
+     * Checks whether the build is signed with test keys, typical of custom ROMs.
      *
-     * Custom ROMs and rooted devices often use test keys.
+     * @return `true` if `Build.TAGS` contains `test-keys`; `false` when tags are null.
      */
-    private fun hasTestKeys(): Boolean = Build.TAGS?.contains("test-keys") == true
+    private fun hasTestKeys(): Boolean = buildTags()?.contains("test-keys") == true
 
     /**
-     * Attempts to locate the "su" binary using shell commands.
+     * Asks the shell to locate `su` with `which su`.
      *
-     * Successful execution indicates root access.
+     * @return `true` if the command prints a path; `false` if it prints nothing or cannot run.
      */
     private fun canExecuteSu(): Boolean =
         try {
-            CommandExecutor.execute("/system/xbin/which su").firstOrNull() != null
+            commandExecutor("which su").firstOrNull() != null
         } catch (_: Exception) {
             false
         }
 
     /**
-     * Reads system properties and checks for insecure configurations.
+     * Reads `getprop` and looks for insecure values such as `ro.debuggable=1` or `ro.secure=0`.
+     * A line must match `[key]: [value]` exactly.
      *
-     * Certain properties are modified on rooted devices.
+     * @return `true` if one is present; `false` if `getprop` fails.
      */
     private fun hasDangerousProps(): Boolean {
-        val props = CommandExecutor.execute("getprop")
+        val props =
+            try {
+                commandExecutor("getprop")
+            } catch (_: Exception) {
+                return false
+            }
 
         return props.any { line ->
+            val trimmed = line.trim()
             SecurityConstants.DANGEROUS_SYSTEM_PROPERTIES.any { (key, value) ->
-                line.contains(key) && line.contains(value)
+                trimmed == "$key: $value"
             }
         }
     }
 
     /**
-     * Checks whether critical system partitions are mounted as writable.
+     * Reads `mount` and looks for `/system` mounted read-write. Understands both `dev
+     * mountpoint type options` and `dev on mountpoint type fs (options)` output formats.
      *
-     * On non-rooted devices, /system should be read-only.
+     * @return `true` if `/system` is writable; `false` if `mount` fails.
      */
     private fun writableSystemPartition(): Boolean {
-        val mounts = CommandExecutor.execute("mount")
+        val mounts =
+            try {
+                commandExecutor("mount")
+            } catch (_: Exception) {
+                return false
+            }
 
         return mounts.any { line ->
-            val parts = line.split(" ")
-            if (parts.size < 4) return@any false
+            val parts = line.trim().split(Regex("\\s+"))
 
-            val mountPoint = parts[1]
-            val options = parts[3]
+            // Two formats exist:
+            //   "/dev/block/dm-0 / ext4 ro,seclabel,relatime"            (mount point in column 2)
+            //   "/dev/block/dm-0 on /system type ext4 (rw,seclabel,...)" (mount point in column 3)
+            val (mountPoint, options) =
+                when {
+                    parts.size >= 6 && parts[1] == "on" ->
+                        parts[2] to parts.last().trim('(', ')')
 
-            mountPoint == "/system" && options.contains("rw")
+                    parts.size >= 4 -> parts[1] to parts[3]
+
+                    else -> return@any false
+                }
+
+            mountPoint == "/system" && options.split(",").contains("rw")
         }
     }
 
     /**
-     * Searches for files commonly used to hide or manage root.
+     * Looks for files left by root-cloaking tools and su daemons.
      *
-     * These files are rarely present on stock devices.
+     * @return `true` if any exists.
      */
     private fun hasRootCloakingFiles(): Boolean =
         SecurityConstants.ROOT_CLOAKING_FILE_PATHS.any {
-            File(it).exists()
+            fileExists(it)
         }
 
     /**
-     * Detects Magisk systemless root.
+     * Looks for Magisk files and directories.
+     *
+     * @return `true` if any exists.
      */
     private fun detectMagisk(): Boolean =
-        File("/sbin/.magisk").exists() ||
-            File("/sbin/magisk").exists() ||
-            File("/data/adb/magisk").exists()
+        fileExists("/sbin/.magisk") ||
+            fileExists("/sbin/magisk") ||
+            fileExists("/data/adb/magisk")
 
     /**
-     * Detects KernelSU root method.
+     * Looks for the KernelSU kernel interface.
+     *
+     * @return `true` if `/sys/kernel/kernelsu` exists.
      */
-    private fun detectKernelSU(): Boolean = File("/sys/kernel/kernelsu").exists()
+    private fun detectKernelSU(): Boolean = fileExists("/sys/kernel/kernelsu")
 
+    /**
+     * Looks for the Zygisk and Magisk module directories.
+     *
+     * @return `true` if any exists.
+     */
     private fun detectZygisk(): Boolean =
-        File("/data/adb/zygisk").exists() ||
-            File("/data/adb/modules").exists()
+        fileExists("/data/adb/zygisk") ||
+            fileExists("/data/adb/modules")
 }
