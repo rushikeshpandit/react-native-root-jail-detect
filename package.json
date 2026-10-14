@@ -185,7 +185,10 @@
     "prepare": "bob build",
     "release": "release-it --only-version",
     "test": "jest",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "test:android": "cd example/android && ./gradlew :react-native-root-jail-detect:testDebugUnitTest",
+    "test:ios": "xcodebuild test -scheme RootJailDetectCore -destination 'platform=iOS Simulator,name=iPhone 17'",
+    "test:native": "mkdir -p .build && clang++ -std=c++17 -Wall -Wextra android/src/test/cpp/scan_utils_test.cpp -o .build/scan_utils_test && .build/scan_utils_test"
   },
   "types": "./lib/typescript/src/index.d.ts",
   "version": "2.1.0",
