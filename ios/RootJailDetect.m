@@ -1,79 +1,74 @@
 #import <React/RCTBridgeModule.h>
+#import <React/RCTEventEmitter.h>
 
 /**
- * RootJailDetect
- *
- * Objective-C bridge interface that exposes native iOS
- * security detection APIs to the React Native JavaScript layer.
- *
- * This file enables communication between React Native
- * and the underlying Swift implementation.
+ * Objective-C bridge that exposes the Swift `RootJailDetect` module (an `RCTEventEmitter`) to
+ * React Native.
  */
-@interface RCT_EXTERN_MODULE(RootJailDetect, NSObject)
+@interface RCT_EXTERN_MODULE(RootJailDetect, RCTEventEmitter)
 
 /**
- * Checks whether the current device is compromised (jailbroken).
+ * Checks whether the device is jailbroken.
  *
- * This method executes multiple native jailbreak-detection
- * heuristics and returns the result asynchronously.
- *
- * @param resolve Promise resolver that receives YES if the device
- *                is jailbroken, NO otherwise
- * @param reject  Promise rejecter used when an error occurs
+ * @param resolve Called with YES if jailbroken, NO otherwise.
+ * @param reject Unused; this call does not fail.
  */
 RCT_EXTERN_METHOD(isDeviceCompromised:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
 /**
- * Determines whether the application is running inside
- * an iOS simulator environment.
+ * Checks whether the app runs in the simulator.
  *
- * Simulators are commonly rooted/jailbroken by default and
- * may represent a higher security risk.
- *
- * @param resolve Promise resolver that receives YES if running
- *                on a simulator, NO otherwise
- * @param reject  Promise rejecter used when an error occurs
+ * @param resolve Called with YES in the simulator.
+ * @param reject Unused; this call does not fail.
  */
 RCT_EXTERN_METHOD(isSimulator:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
 /**
- * Checks whether a debugger is currently attached
- * to the running application process.
+ * Checks whether a debugger is attached (always NO in DEBUG builds).
  *
- * This helps detect reverse engineering, debugging,
- * and runtime inspection attempts.
- *
- * @param resolve Promise resolver that receives YES if a debugger
- *                is attached, NO otherwise
- * @param reject  Promise rejecter used when an error occurs
+ * @param resolve Called with YES if the process is traced.
+ * @param reject Unused; this call does not fail.
  */
 RCT_EXTERN_METHOD(isDebuggerAttached:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
 /**
- Returns all detection reasons
+ * Returns the human-readable reasons from all detectors.
+ *
+ * @param resolve Called with an NSArray of unique strings (empty when clean).
+ * @param reject Unused; this call does not fail.
  */
 RCT_EXTERN_METHOD(getDetectionReasons:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 
 /**
- Starts watchdog
+ * Starts the runtime watchdog.
+ *
+ * @param options NSDictionary with optional `interval` (milliseconds, default 3000) and
+ *     `protectionMode` (`LOG_ONLY`, `THROW_EXCEPTION`, `TERMINATE`).
  */
 RCT_EXTERN_METHOD(startSecurityWatchdog:(NSDictionary *)options)
 
 /**
- Stops watchdog
+ * Stops the runtime watchdog.
  */
 RCT_EXTERN_METHOD(stopSecurityWatchdog)
 
 /**
- * Indicates whether the module must be initialized
- * on the main (UI) thread.
+ * Reports whether the watchdog loop is active.
  *
- * Returning NO allows React Native to initialize
- * this module on a background thread for better performance.
+ * @param resolve Called with YES while it runs.
+ * @param reject Unused; this call does not fail.
+ */
+RCT_EXTERN_METHOD(isSecurityWatchdogRunning:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+
+/**
+ * Tells React Native the module needs no main-thread initialisation.
+ *
+ * @return Always NO.
  */
 + (BOOL)requiresMainQueueSetup
 {

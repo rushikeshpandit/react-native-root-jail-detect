@@ -1,51 +1,62 @@
 export interface RootJailDetectModule {
   /**
-   * Check if the device is compromised (rooted on Android, jailbroken on iOS)
-   * @returns Promise that resolves to true if device is compromised, false otherwise
+   * Checks whether the device is rooted (Android) or jailbroken (iOS).
+   *
+   * @returns Promise resolving to `true` if compromised.
    */
   isDeviceCompromised(): Promise<boolean>;
 
   /**
-   * Check if the app is running in an emulator
-   * @returns Promise that resolves to true if running in emulator
+   * Checks whether the app runs on an Android emulator (optional).
+   *
+   * @returns Promise resolving to `true` on an emulator.
    */
   isEmulator?(): Promise<boolean>;
 
   /**
-   * Check if the app is running in an simulator
-   * @returns Promise that resolves to true if running in simulator
+   * Checks whether the app runs on an iOS simulator (optional).
+   *
+   * @returns Promise resolving to `true` on a simulator.
    */
   isSimulator?(): Promise<boolean>;
 
   /**
-   * Check if a debugger is attached
-   * @returns Promise that resolves to true if debugger is attached
+   * Checks whether a debugger is attached (optional).
+   *
+   * @returns Promise resolving to `true` if a debugger is attached.
    */
   isDebuggerAttached?(): Promise<boolean>;
 
   /**
-   * Gives the reason for whether the device is compromised
-   * @returns Promise that resolves to array of string if the device
-   *  is compromised, empty otherwise
+   * Lists the reasons the device was flagged (optional).
+   *
+   * @returns Promise resolving to the reason strings (empty when clean).
    */
   getDetectionReasons?(): Promise<string[]>;
 
   /**
-   * Start runtime security watchdog
+   * Starts the runtime security watchdog.
    *
-   * This method starts the runtime security watchdog with
-   * the specified interval and protection mode.
-   *
-   * @param {Object} options - Object containing the options for the security watchdog
-   * @param {number} [options.interval=3000] - Interval in milliseconds between each security check
-   * @param {string} [options.protectionMode='LOG_ONLY'] - Protection mode to use. Can be either 'LOG_ONLY' or 'TERMINATE'
+   * @param options.interval Milliseconds between checks (default 3000).
+   * @param options.protectionMode `LOG_ONLY`, `THROW_EXCEPTION` or `TERMINATE`.
+   * @returns Nothing (`void`).
    */
-  startSecurityWatchdog(options: {}): void;
+  startSecurityWatchdog(options: {
+    interval?: number;
+    protectionMode?: string;
+  }): void;
 
   /**
-   * Stop runtime security watchdog
+   * Stops the runtime security watchdog.
    *
-   * This method stops the runtime security watchdog if it is currently running.
+   * @returns Nothing (`void`).
    */
   stopSecurityWatchdog(): void;
+
+  /**
+   * Reports whether the watchdog is running.
+   *
+   * @returns Promise resolving to `true` while it runs.
+   */
+  isSecurityWatchdogRunning(): Promise<boolean>;
 }
